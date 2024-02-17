@@ -1,0 +1,266 @@
+[
+  {
+    "identifier": "A",
+    "exercises": [
+      {
+        "name": "Smith Machine Squat",
+        "serie": {
+          "Repetitions": {
+            "sets": 4,
+            "repetitions": 10,
+            "load": null
+          }
+        }
+      },
+      {
+        "name": "Leg Press Horizontal",
+        "serie": {
+          "Repetitions": {
+            "sets": 3,
+            "repetitions": 12,
+            "load": null
+          }
+        }
+      },
+      {
+        "name": "Leg Curl Machine",
+        "serie": {
+          "Repetitions": {
+            "sets": 3,
+            "repetitions": 12,
+            "load": null
+          }
+        }
+      },
+      {
+        "name": "Glute Machine",
+        "serie": {
+          "Repetitions": {
+            "sets": 3,
+            "repetitions": 12,
+            "load": null
+          }
+        }
+      },
+      {
+        "name": "Glute Leg Raise",
+        "serie": {
+          "Repetitions": {
+            "sets": 3,
+            "repetitions": 12,
+            "load": null
+          }
+        }
+      },
+      {
+        "name": "Plank",
+        "serie": {
+          "Continuous": {
+            "time_in_seconds": 30,
+            "sets": 3
+          }
+        }
+      }
+    ]
+  },
+  {
+    "identifier": "B",
+    "exercises": [
+      {
+        "name": "Free Weight Squat",
+        "serie": {
+          "Repetitions": {
+            "sets": 4,
+            "repetitions": 10,
+            "load": null
+          }
+        }
+      },
+      {
+        "name": "Leg Press 45 degrees",
+        "serie": {
+          "Repetitions": {
+            "sets": 3,
+            "repetitions": 12,
+            "load": null
+          }
+        }
+      },
+      {
+        "name": "Hip Abductor Machine",
+        "serie": {
+          "Repetitions": {
+            "sets": 3,
+            "repetitions": 12,
+            "load": null
+          }
+        }
+      },
+      {
+        "name": "Hip Adductor Machine",
+        "serie": {
+          "Repetitions": {
+            "sets": 3,
+            "repetitions": 12,
+            "load": null
+          }
+        }
+      },
+      {
+        "name": "Glute Machine",
+        "serie": {
+          "Repetitions": {
+            "sets": 3,
+            "repetitions": 12,
+            "load": null
+          }
+        }
+      },
+      {
+        "name": "Glute Leg Raise",
+        "serie": {
+          "Repetitions": {
+            "sets": 3,
+            "repetitions": 12,
+            "load": null
+          }
+        }
+      },
+      {
+        "name": "Side Plank",
+        "serie": {
+          "Continuous": {
+            "time_in_seconds": 30,
+            "sets": 3
+          }
+        }
+      }
+    ]
+  },
+  {
+    "identifier": "C",
+    "exercises": [
+      {
+        "name": "Side Plank",
+        "serie": {
+          "Continuous": {
+            "time_in_seconds": 30,
+            "sets": 3
+          }
+        }
+      },
+      {
+        "name": "Plank",
+        "serie": {
+          "Continuous": {
+            "time_in_seconds": 30,
+            "sets": 3
+          }
+        }
+      },
+      {
+        "name": "Ab Crunch Machine",
+        "serie": {
+          "Repetitions": {
+            "sets": 3,
+            "repetitions": 15,
+            "load": null
+          }
+        }
+      },
+      {
+        "name": "Leg Raise",
+        "serie": {
+          "Repetitions": {
+            "sets": 3,
+            "repetitions": 12,
+            "load": null
+          }
+        }
+      },
+      {
+        "name": "Cardio",
+        "serie": {
+          "Repetitions": {
+            "sets": 3,
+            "repetitions": 12,
+            "load": null
+          }
+        }
+      },
+      {
+        "name": "Plank",
+        "serie": {
+          "Continuous": {
+            "time_in_seconds": 1800,
+            "sets": null
+          }
+        }
+      }
+    ]
+  },
+  {
+    "identifier": "D",
+    "exercises": [
+      {
+        "name": "Sumo Squat",
+        "serie": {
+          "Repetitions": {
+            "sets": 4,
+            "repetitions": 10,
+            "load": null
+          }
+        }
+      },
+      {
+        "name": "Leg Press Horizontal",
+        "serie": {
+          "Repetitions": {
+            "sets": 3,
+            "repetitions": 12,
+            "load": null
+          }
+        }
+      },
+      {
+        "name": "Leg Curl Machine",
+        "serie": {
+          "Repetitions": {
+            "sets": 3,
+            "repetitions": 12,
+            "load": null
+          }
+        }
+      },
+      {
+        "name": "Glute Machine",
+        "serie": {
+          "Repetitions": {
+            "sets": 3,
+            "repetitions": 12,
+            "load": null
+          }
+        }
+      },
+      {
+        "name": "Glute Leg Raise",
+        "serie": {
+          "Repetitions": {
+            "sets": 3,
+            "repetitions": 12,
+            "load": null
+          }
+        }
+      },
+      {
+        "name": "Plank",
+        "serie": {
+          "Continuous": {
+            "time_in_seconds": 30,
+            "sets": 3
+          }
+        }
+      }
+    ]
+  }
+]
