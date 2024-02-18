@@ -1,51 +1,17 @@
+use esperto_fit::{
+    state::{Command, State},
+    storage::{HandlerResult, MyDialogue, MyStorage},
+    training::{ContinuousSerie, Exercise, RepetitionSerie, Serie, Training},
+};
 use log::{debug, info};
-use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, error::Error};
 use teloxide::{
-    dispatching::dialogue::GetChatId,
+    dispatching::dialogue::{ErasedStorage, GetChatId, SqliteStorage, Storage},
     payloads::SendMessageSetters,
     prelude::*,
     types::{InlineKeyboardButton, InlineKeyboardMarkup, Me},
     utils::command::BotCommands,
 };
-
-#[derive(BotCommands)]
-#[command(rename_rule = "lowercase")]
-enum Command {
-    Help,
-    Start,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Training {
-    identifier: String,
-    exercises: Vec<Exercise>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Exercise {
-    name: String,
-    serie: Serie,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct RepetitionSerie {
-    sets: u8,
-    repetitions: u8,
-    load: Option<f32>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ContinuousSerie {
-    time_in_seconds: u16,
-    sets: Option<u8>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-enum Serie {
-    Repetitions(RepetitionSerie),
-    Continuous(ContinuousSerie),
-}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -55,11 +21,29 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let bot = Bot::from_env();
 
+    let storage: MyStorage = SqliteStorage::open(
+        "db.sqlite",
+        teloxide::dispatching::dialogue::serializer::Json,
+    )
+    .await
+    .unwrap()
+    .erase();
+
     let handler = dptree::entry()
-        .branch(Update::filter_message().endpoint(message_handler))
-        .branch(Update::filter_callback_query().endpoint(callback_handler));
+        // .branch(Update::filter_callback_query().endpoint(callback_handler))
+        .branch(
+            Update::filter_message()
+                .enter_dialogue::<Message, ErasedStorage<State>, State>()
+                .branch(dptree::case![State::Start].endpoint(start))
+                .branch(
+                    dptree::case![State::Training(training)]
+                        .branch(Update::filter_callback_query().endpoint(callback_handler))
+                        .branch(dptree::endpoint(invalid_command)),
+                ),
+        );
 
     Dispatcher::builder(bot, handler)
+        .dependencies(dptree::deps![storage])
         .enable_ctrlc_handler()
         .build()
         .dispatch()
@@ -68,16 +52,39 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+async fn invalid_command(bot: Bot, msg: Message) -> HandlerResult {
+    bot.send_message(msg.chat.id, "Please, send /get or /reset.")
+        .await?;
+    Ok(())
+}
+
+async fn start(bot: Bot, msg: Message, me: Me, dialogue: MyDialogue) -> HandlerResult {
+    let keyboard = make_workout_keyboard();
+    let trainings: Vec<Training> = serde_json::from_str(include_str!("../workout.json")).unwrap();
+
+    let trainings = trainings
+        .into_iter()
+        .map(|training| (training.identifier.clone(), training))
+        .collect::<HashMap<_, _>>();
+
+    dialogue.update(State::Training(trainings)).await?;
+    bot.send_message(msg.chat.id, "Choose your training:")
+        .reply_markup(keyboard)
+        .await?;
+
+    Ok(())
+}
+
 fn make_workout_keyboard() -> InlineKeyboardMarkup {
     let mut keyboard: Vec<Vec<InlineKeyboardButton>> = vec![];
 
-    let trainings: Vec<Training> = serde_json::from_str(include_str!("workout.json")).unwrap();
+    let trainings: Vec<Training> = serde_json::from_str(include_str!("../workout.json")).unwrap();
 
     for training in trainings {
         let identifier = training.identifier;
         let row = vec![InlineKeyboardButton::callback(
             identifier.clone(),
-            format!("training:{identifier}"),
+            format!("T:{identifier}"),
         )];
 
         keyboard.push(row);
@@ -86,25 +93,31 @@ fn make_workout_keyboard() -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(keyboard)
 }
 
-fn make_training_keyboard(training_identifier: String) -> InlineKeyboardMarkup {
+fn make_training_keyboard(training: Training) -> InlineKeyboardMarkup {
     let mut keyboard: Vec<Vec<InlineKeyboardButton>> = vec![];
 
-    let trainings: Vec<Training> = serde_json::from_str(include_str!("workout.json")).unwrap();
-    let trainings = trainings
-        .into_iter()
-        .map(|training| (training.identifier, training.exercises))
-        .collect::<HashMap<_, _>>();
+    let training_name = training.identifier;
 
-    let exercises = trainings.get(&training_identifier).unwrap();
-
-    for exercise in exercises {
-        let row: Vec<InlineKeyboardButton> = vec![InlineKeyboardButton::callback(
-            exercise.name.clone(),
-            exercise.name.clone(),
-        )];
+    for exercise in training.exercises {
+        let exercise_name = exercise.name.clone();
+        let row: Vec<InlineKeyboardButton> = vec![
+            InlineKeyboardButton::callback(
+                exercise_name.clone(),
+                format!("E:{training_name}:{exercise_name}"),
+            ),
+            InlineKeyboardButton::callback(
+                "Change Load",
+                format!("CL:{training_name}:{exercise_name}"),
+            ),
+        ];
 
         keyboard.push(row);
     }
+
+    keyboard.push(vec![InlineKeyboardButton::callback(
+        "Completed!",
+        format!("FE:{training_name}"),
+    )]);
 
     InlineKeyboardMarkup::new(keyboard)
 }
@@ -113,6 +126,7 @@ async fn message_handler(
     bot: Bot,
     msg: Message,
     me: Me,
+    dialogue: MyDialogue,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     if let Some(text) = msg.text() {
         match BotCommands::parse(text, me.username()) {
@@ -122,6 +136,15 @@ async fn message_handler(
             }
             Ok(Command::Start) => {
                 let keyboard = make_workout_keyboard();
+                let trainings: Vec<Training> =
+                    serde_json::from_str(include_str!("../workout.json")).unwrap();
+
+                let trainings = trainings
+                    .into_iter()
+                    .map(|training| (training.identifier.clone(), training))
+                    .collect::<HashMap<_, _>>();
+
+                dialogue.update(State::Training(trainings)).await?;
                 bot.send_message(msg.chat.id, "Choose your training:")
                     .reply_markup(keyboard)
                     .await?;
@@ -136,21 +159,59 @@ async fn message_handler(
     Ok(())
 }
 
-async fn callback_handler(bot: Bot, q: CallbackQuery) -> Result<(), Box<dyn Error + Send + Sync>> {
+async fn callback_handler(
+    bot: Bot,
+    q: CallbackQuery,
+    dialogue: MyDialogue,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     match &q.data {
         Some(data) => {
             debug!("Callback handler data: {data}");
             let mut data_slipt = data.split(':');
             let mode = data_slipt.next();
 
-            if let Some("training") = mode {
-                let training = &data_slipt.next().unwrap();
-                let keyboard = make_training_keyboard(training.to_string());
+            if let Some("T") = mode {
+                let training_identifier = data_slipt.next().unwrap();
+                if let State::Training(training) = dialogue.get().await.unwrap().unwrap() {
+                    let keyboard =
+                        make_training_keyboard(training.get(training_identifier).cloned().unwrap());
+
+                    bot.send_message(
+                        q.chat_id().unwrap(),
+                        format!("Exercises for training {training_identifier}"),
+                    )
+                    .reply_markup(keyboard)
+                    .await?;
+
+                    bot.answer_callback_query(q.id.clone()).await?;
+                }
+            }
+
+            if let Some("E") = mode {
+                let training = data_slipt.next().unwrap();
+                let exercise = data_slipt.next().unwrap();
+
+                let trainings: Vec<Training> =
+                    serde_json::from_str(include_str!("../workout.json")).unwrap();
+                let trainings = trainings
+                    .into_iter()
+                    .map(|training| (training.identifier, training.exercises))
+                    .collect::<HashMap<_, _>>();
+
+                let training = trainings.get(training).unwrap();
+
+                let exercise = training
+                    .into_iter()
+                    .filter(|training| training.name == exercise)
+                    .collect::<Vec<_>>()
+                    .first()
+                    .cloned()
+                    .unwrap();
+
                 bot.send_message(
                     q.chat_id().unwrap(),
-                    format!("Exercises for training {training}"),
+                    format!("{} - {}", exercise.name, exercise.serie),
                 )
-                .reply_markup(keyboard)
                 .await?;
 
                 bot.answer_callback_query(q.id.clone()).await?;
@@ -315,13 +376,6 @@ fn _make_json() {
                         sets: 3,
                         repetitions: 12,
                         load: None,
-                    }),
-                },
-                Exercise {
-                    name: "Plank".to_owned(),
-                    serie: Serie::Continuous(ContinuousSerie {
-                        time_in_seconds: 1800,
-                        sets: None,
                     }),
                 },
             ],

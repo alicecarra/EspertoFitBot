@@ -181,19 +181,9 @@
       {
         "name": "Cardio",
         "serie": {
-          "Repetitions": {
-            "sets": 3,
-            "repetitions": 12,
-            "load": null
-          }
-        }
-      },
-      {
-        "name": "Plank",
-        "serie": {
           "Continuous": {
             "time_in_seconds": 1800,
-            "sets": null
+            "sets": 0
           }
         }
       }
