@@ -1,73 +1,149 @@
+use std::collections::HashMap;
+
 use esperto_fit::{
-    state::{Command, State},
-    storage::{HandlerResult, MyDialogue, MyStorage},
-    training::{ContinuousSerie, Exercise, RepetitionSerie, Serie, Training},
+    state::{BotDialogue, Command, State},
+    training::Training,
 };
-use log::{debug, info};
-use std::{collections::HashMap, error::Error};
 use teloxide::{
-    dispatching::dialogue::{ErasedStorage, GetChatId, SqliteStorage, Storage},
-    payloads::SendMessageSetters,
+    dispatching::{
+        dialogue::{self, GetChatId, InMemStorage},
+        UpdateHandler,
+    },
     prelude::*,
-    types::{InlineKeyboardButton, InlineKeyboardMarkup, Me},
+    types::{InlineKeyboardButton, InlineKeyboardMarkup},
     utils::command::BotCommands,
 };
 
+type HandlerResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
+
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() {
     dotenv::load().unwrap();
     pretty_env_logger::init();
-    info!("Starting the smartest fit bot ever existed...");
+    log::info!("Starting purchase bot...");
 
     let bot = Bot::from_env();
 
-    let storage: MyStorage = SqliteStorage::open(
-        "db.sqlite",
-        teloxide::dispatching::dialogue::serializer::Json,
-    )
-    .await
-    .unwrap()
-    .erase();
-
-    let handler = dptree::entry()
-        // .branch(Update::filter_callback_query().endpoint(callback_handler))
-        .branch(
-            Update::filter_message()
-                .enter_dialogue::<Message, ErasedStorage<State>, State>()
-                .branch(dptree::case![State::Start].endpoint(start))
-                .branch(
-                    dptree::case![State::Training(training)]
-                        .branch(Update::filter_callback_query().endpoint(callback_handler))
-                        .branch(dptree::endpoint(invalid_command)),
-                ),
-        );
-
-    Dispatcher::builder(bot, handler)
-        .dependencies(dptree::deps![storage])
+    Dispatcher::builder(bot, schema())
+        .dependencies(dptree::deps![InMemStorage::<State>::new()])
         .enable_ctrlc_handler()
         .build()
         .dispatch()
         .await;
-
-    Ok(())
 }
 
-async fn invalid_command(bot: Bot, msg: Message) -> HandlerResult {
-    bot.send_message(msg.chat.id, "Please, send /get or /reset.")
+fn schema() -> UpdateHandler<Box<dyn std::error::Error + Send + Sync + 'static>> {
+    use dptree::case;
+
+    let command_handler = teloxide::filter_command::<Command, _>().branch(
+        case![State::Start]
+            .branch(case![Command::Help].endpoint(help))
+            .branch(case![Command::Start].endpoint(start)),
+    );
+
+    let message_handler = Update::filter_message()
+        .branch(command_handler)
+        .branch(dptree::endpoint(invalid_state));
+
+    let callback_query_handler = Update::filter_callback_query()
+        .branch(case![State::SelectTraining { training }].endpoint(select_training));
+
+    dialogue::enter::<Update, InMemStorage<State>, State, _>()
+        .branch(message_handler)
+        .branch(callback_query_handler)
+}
+
+async fn help(bot: Bot, msg: Message) -> HandlerResult {
+    bot.send_message(msg.chat.id, Command::descriptions().to_string())
         .await?;
     Ok(())
 }
 
-async fn start(bot: Bot, msg: Message, me: Me, dialogue: MyDialogue) -> HandlerResult {
-    let keyboard = make_workout_keyboard();
+async fn invalid_state(bot: Bot, msg: Message) -> HandlerResult {
+    bot.send_message(
+        msg.chat.id,
+        "Unable to handle the message. Type /help to see the usage.",
+    )
+    .await?;
+    Ok(())
+}
+
+async fn select_training(
+    bot: Bot,
+    _dialogue: BotDialogue,
+    q: CallbackQuery,
+    training: HashMap<String, Training>,
+) -> HandlerResult {
+    println!("in callback_handler");
+
+    if let Some(data) = &q.data {
+        let mut data_slipt = data.split(':');
+        let mode = data_slipt.next();
+
+        if let Some("T") = mode {
+            let training_identifier = data_slipt.next().unwrap();
+            let keyboard =
+                make_training_keyboard(training.get(training_identifier).cloned().unwrap());
+
+            bot.send_message(
+                q.chat_id().unwrap(),
+                format!("Exercises for training {training_identifier}"),
+            )
+            .reply_markup(keyboard)
+            .await?;
+
+            bot.answer_callback_query(q.id.clone()).await?;
+        }
+
+        if let Some("E") = mode {
+            let training = data_slipt.next().unwrap();
+            let exercise = data_slipt.next().unwrap();
+
+            let trainings: Vec<Training> =
+                serde_json::from_str(include_str!("../workout.json")).unwrap();
+            let trainings = trainings
+                .into_iter()
+                .map(|training| (training.identifier, training.exercises))
+                .collect::<HashMap<_, _>>();
+
+            let training = trainings.get(training).unwrap();
+
+            let exercise = training
+                .into_iter()
+                .filter(|training| training.name == exercise)
+                .collect::<Vec<_>>()
+                .first()
+                .cloned()
+                .unwrap();
+
+            bot.send_message(
+                q.chat_id().unwrap(),
+                format!("{} - {}", exercise.name, exercise.serie),
+            )
+            .await?;
+
+            bot.answer_callback_query(q.id.clone()).await?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn start(bot: Bot, dialogue: BotDialogue, msg: Message) -> HandlerResult {
     let trainings: Vec<Training> = serde_json::from_str(include_str!("../workout.json")).unwrap();
+    let keyboard = make_workout_keyboard(trainings.clone());
 
     let trainings = trainings
         .into_iter()
         .map(|training| (training.identifier.clone(), training))
         .collect::<HashMap<_, _>>();
 
-    dialogue.update(State::Training(trainings)).await?;
+    dialogue
+        .update(State::SelectTraining {
+            training: trainings,
+        })
+        .await?;
+
     bot.send_message(msg.chat.id, "Choose your training:")
         .reply_markup(keyboard)
         .await?;
@@ -75,10 +151,8 @@ async fn start(bot: Bot, msg: Message, me: Me, dialogue: MyDialogue) -> HandlerR
     Ok(())
 }
 
-fn make_workout_keyboard() -> InlineKeyboardMarkup {
+fn make_workout_keyboard(trainings: Vec<Training>) -> InlineKeyboardMarkup {
     let mut keyboard: Vec<Vec<InlineKeyboardButton>> = vec![];
-
-    let trainings: Vec<Training> = serde_json::from_str(include_str!("../workout.json")).unwrap();
 
     for training in trainings {
         let identifier = training.identifier;
@@ -120,319 +194,4 @@ fn make_training_keyboard(training: Training) -> InlineKeyboardMarkup {
     )]);
 
     InlineKeyboardMarkup::new(keyboard)
-}
-
-async fn message_handler(
-    bot: Bot,
-    msg: Message,
-    me: Me,
-    dialogue: MyDialogue,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
-    if let Some(text) = msg.text() {
-        match BotCommands::parse(text, me.username()) {
-            Ok(Command::Help) => {
-                bot.send_message(msg.chat.id, Command::descriptions().to_string())
-                    .await?;
-            }
-            Ok(Command::Start) => {
-                let keyboard = make_workout_keyboard();
-                let trainings: Vec<Training> =
-                    serde_json::from_str(include_str!("../workout.json")).unwrap();
-
-                let trainings = trainings
-                    .into_iter()
-                    .map(|training| (training.identifier.clone(), training))
-                    .collect::<HashMap<_, _>>();
-
-                dialogue.update(State::Training(trainings)).await?;
-                bot.send_message(msg.chat.id, "Choose your training:")
-                    .reply_markup(keyboard)
-                    .await?;
-            }
-
-            Err(_) => {
-                bot.send_message(msg.chat.id, "Command not found!").await?;
-            }
-        }
-    }
-
-    Ok(())
-}
-
-async fn callback_handler(
-    bot: Bot,
-    q: CallbackQuery,
-    dialogue: MyDialogue,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
-    match &q.data {
-        Some(data) => {
-            debug!("Callback handler data: {data}");
-            let mut data_slipt = data.split(':');
-            let mode = data_slipt.next();
-
-            if let Some("T") = mode {
-                let training_identifier = data_slipt.next().unwrap();
-                if let State::Training(training) = dialogue.get().await.unwrap().unwrap() {
-                    let keyboard =
-                        make_training_keyboard(training.get(training_identifier).cloned().unwrap());
-
-                    bot.send_message(
-                        q.chat_id().unwrap(),
-                        format!("Exercises for training {training_identifier}"),
-                    )
-                    .reply_markup(keyboard)
-                    .await?;
-
-                    bot.answer_callback_query(q.id.clone()).await?;
-                }
-            }
-
-            if let Some("E") = mode {
-                let training = data_slipt.next().unwrap();
-                let exercise = data_slipt.next().unwrap();
-
-                let trainings: Vec<Training> =
-                    serde_json::from_str(include_str!("../workout.json")).unwrap();
-                let trainings = trainings
-                    .into_iter()
-                    .map(|training| (training.identifier, training.exercises))
-                    .collect::<HashMap<_, _>>();
-
-                let training = trainings.get(training).unwrap();
-
-                let exercise = training
-                    .into_iter()
-                    .filter(|training| training.name == exercise)
-                    .collect::<Vec<_>>()
-                    .first()
-                    .cloned()
-                    .unwrap();
-
-                bot.send_message(
-                    q.chat_id().unwrap(),
-                    format!("{} - {}", exercise.name, exercise.serie),
-                )
-                .await?;
-
-                bot.answer_callback_query(q.id.clone()).await?;
-            }
-        }
-        _ => (),
-    }
-
-    Ok(())
-}
-
-fn _make_json() {
-    let trainings = vec![
-        Training {
-            identifier: "A".to_owned(),
-            exercises: vec![
-                Exercise {
-                    name: "Smith Machine Squat".to_owned(),
-                    serie: Serie::Repetitions(RepetitionSerie {
-                        sets: 4,
-                        repetitions: 10,
-                        load: None,
-                    }),
-                },
-                Exercise {
-                    name: "Leg Press Horizontal".to_owned(),
-                    serie: Serie::Repetitions(RepetitionSerie {
-                        sets: 3,
-                        repetitions: 12,
-                        load: None,
-                    }),
-                },
-                Exercise {
-                    name: "Leg Curl Machine".to_owned(),
-                    serie: Serie::Repetitions(RepetitionSerie {
-                        sets: 3,
-                        repetitions: 12,
-                        load: None,
-                    }),
-                },
-                Exercise {
-                    name: "Glute Machine".to_owned(),
-                    serie: Serie::Repetitions(RepetitionSerie {
-                        sets: 3,
-                        repetitions: 12,
-                        load: None,
-                    }),
-                },
-                Exercise {
-                    name: "Glute Leg Raise".to_owned(),
-                    serie: Serie::Repetitions(RepetitionSerie {
-                        sets: 3,
-                        repetitions: 12,
-                        load: None,
-                    }),
-                },
-                Exercise {
-                    name: "Plank".to_owned(),
-                    serie: Serie::Continuous(ContinuousSerie {
-                        time_in_seconds: 30,
-                        sets: Some(3),
-                    }),
-                },
-            ],
-        },
-        Training {
-            identifier: "B".to_owned(),
-            exercises: vec![
-                Exercise {
-                    name: "Free Weight Squat".to_owned(),
-                    serie: Serie::Repetitions(RepetitionSerie {
-                        sets: 4,
-                        repetitions: 10,
-                        load: None,
-                    }),
-                },
-                Exercise {
-                    name: "Leg Press 45 degrees".to_owned(),
-                    serie: Serie::Repetitions(RepetitionSerie {
-                        sets: 3,
-                        repetitions: 12,
-                        load: None,
-                    }),
-                },
-                Exercise {
-                    name: "Hip Abductor Machine".to_owned(),
-                    serie: Serie::Repetitions(RepetitionSerie {
-                        sets: 3,
-                        repetitions: 12,
-                        load: None,
-                    }),
-                },
-                Exercise {
-                    name: "Hip Adductor Machine".to_owned(),
-                    serie: Serie::Repetitions(RepetitionSerie {
-                        sets: 3,
-                        repetitions: 12,
-                        load: None,
-                    }),
-                },
-                Exercise {
-                    name: "Glute Machine".to_owned(),
-                    serie: Serie::Repetitions(RepetitionSerie {
-                        sets: 3,
-                        repetitions: 12,
-                        load: None,
-                    }),
-                },
-                Exercise {
-                    name: "Glute Leg Raise".to_owned(),
-                    serie: Serie::Repetitions(RepetitionSerie {
-                        sets: 3,
-                        repetitions: 12,
-                        load: None,
-                    }),
-                },
-                Exercise {
-                    name: "Side Plank".to_owned(),
-                    serie: Serie::Continuous(ContinuousSerie {
-                        time_in_seconds: 30,
-                        sets: Some(3),
-                    }),
-                },
-            ],
-        },
-        Training {
-            identifier: "C".to_owned(),
-            exercises: vec![
-                Exercise {
-                    name: "Side Plank".to_owned(),
-                    serie: Serie::Continuous(ContinuousSerie {
-                        time_in_seconds: 30,
-                        sets: Some(3),
-                    }),
-                },
-                Exercise {
-                    name: "Plank".to_owned(),
-                    serie: Serie::Continuous(ContinuousSerie {
-                        time_in_seconds: 30,
-                        sets: Some(3),
-                    }),
-                },
-                Exercise {
-                    name: "Ab Crunch Machine".to_owned(),
-                    serie: Serie::Repetitions(RepetitionSerie {
-                        sets: 3,
-                        repetitions: 15,
-                        load: None,
-                    }),
-                },
-                Exercise {
-                    name: "Leg Raise".to_owned(),
-                    serie: Serie::Repetitions(RepetitionSerie {
-                        sets: 3,
-                        repetitions: 12,
-                        load: None,
-                    }),
-                },
-                Exercise {
-                    name: "Cardio".to_owned(),
-                    serie: Serie::Repetitions(RepetitionSerie {
-                        sets: 3,
-                        repetitions: 12,
-                        load: None,
-                    }),
-                },
-            ],
-        },
-        Training {
-            identifier: "D".to_owned(),
-            exercises: vec![
-                Exercise {
-                    name: "Sumo Squat".to_owned(),
-                    serie: Serie::Repetitions(RepetitionSerie {
-                        sets: 4,
-                        repetitions: 10,
-                        load: None,
-                    }),
-                },
-                Exercise {
-                    name: "Leg Press Horizontal".to_owned(),
-                    serie: Serie::Repetitions(RepetitionSerie {
-                        sets: 3,
-                        repetitions: 12,
-                        load: None,
-                    }),
-                },
-                Exercise {
-                    name: "Leg Curl Machine".to_owned(),
-                    serie: Serie::Repetitions(RepetitionSerie {
-                        sets: 3,
-                        repetitions: 12,
-                        load: None,
-                    }),
-                },
-                Exercise {
-                    name: "Glute Machine".to_owned(),
-                    serie: Serie::Repetitions(RepetitionSerie {
-                        sets: 3,
-                        repetitions: 12,
-                        load: None,
-                    }),
-                },
-                Exercise {
-                    name: "Glute Leg Raise".to_owned(),
-                    serie: Serie::Repetitions(RepetitionSerie {
-                        sets: 3,
-                        repetitions: 12,
-                        load: None,
-                    }),
-                },
-                Exercise {
-                    name: "Plank".to_owned(),
-                    serie: Serie::Continuous(ContinuousSerie {
-                        time_in_seconds: 30,
-                        sets: Some(3),
-                    }),
-                },
-            ],
-        },
-    ];
-
-    println!("{}", serde_json::to_string_pretty(&trainings).unwrap());
 }

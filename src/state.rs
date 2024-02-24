@@ -1,19 +1,31 @@
 use std::collections::HashMap;
 
-use teloxide::macros::BotCommands;
+use teloxide::{
+    dispatching::dialogue::{Dialogue, InMemStorage},
+    macros::BotCommands,
+};
 
 use crate::training::Training;
 
-#[derive(BotCommands)]
-#[command(rename_rule = "lowercase")]
+pub type BotDialogue = Dialogue<State, InMemStorage<State>>;
+
+#[derive(Debug, BotCommands, Clone)]
+#[command(
+    rename_rule = "lowercase",
+    description = "These commands are supported:"
+)]
 pub enum Command {
+    #[command(description = "display this text.")]
     Help,
+    #[command(description = "start.")]
     Start,
 }
 
-#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub enum State {
     #[default]
     Start,
-    Training(HashMap<String, Training>),
+    SelectTraining {
+        training: HashMap<String, Training>,
+    },
 }
